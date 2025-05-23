@@ -1,6 +1,7 @@
 const express = require('express');
 const puppeteer = require('puppeteer');
 const cors = require('cors');
+const fetch = require('node-fetch');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -8,6 +9,18 @@ const port = process.env.PORT || 3001;
 // Middleware
 app.use(express.json());
 app.use(cors());
+
+// Helper function to validate image URLs
+async function validateImageUrl(url) {
+  try {
+    const response = await fetch(url, { method: 'HEAD' });
+    const contentType = response.headers.get('content-type');
+    return response.ok && contentType !== null && contentType.startsWith('image/');
+  } catch (error) {
+    console.error('Error validating image URL:', url, error);
+    return false;
+  }
+}
 
 // Documentation endpoint
 app.get('/api/hotel-info', (req, res) => {
@@ -162,6 +175,131 @@ app.post('/api/hotel-info', async (req, res) => {
     console.error('Error scraping hotel info:', error);
     res.status(500).json({ 
       error: 'Failed to scrape hotel information',
+      message: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// Hotel images endpoint
+app.post('/api/hotel-images', async (req, res) => {
+  try {
+    const { destination } = req.body;
+    
+    if (!destination) {
+      return res.status(400).json({ 
+        error: 'Missing required parameter: destination',
+        example: { destination: 'Hilton New York' }
+      });
+    }
+
+    console.log('Scraping hotel images for:', destination);
+
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1920,1080']
+    });
+
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1920, height: 1080 });
+    
+    // Navigate to Google Travel search
+    const searchUrl = `https://www.google.com/travel/search?q=${encodeURIComponent(destination)}`;
+    console.log('Navigating to:', searchUrl);
+    await page.goto(searchUrl, { waitUntil: 'networkidle0' });
+    console.log('Page loaded');
+
+    // First check if Photos tab is already visible
+    const photosTabExists = await page.evaluate(() => {
+      const photosTab = document.querySelector('[aria-label="Photos"][id="photos"]');
+      return !!photosTab;
+    });
+
+    if (photosTabExists) {
+      console.log('Photos tab already exists, clicking it directly');
+      await page.click('[aria-label="Photos"][id="photos"]');
+    } else {
+      // If Photos tab is not visible, click the hotel entity link first
+      await page.waitForSelector('a[data-href^="/entity/C"][href^="/travel/search?"]', { timeout: 15000 });
+      console.log('Found hotel entity link');
+      
+      await page.click('a[data-href^="/entity/C"][href^="/travel/search?"]');
+      console.log('Clicked hotel entity link');
+
+      // Wait for the hotel page to load
+      await page.waitForNavigation({ waitUntil: 'networkidle0' });
+      console.log('Hotel page loaded');
+
+      // Now wait for and click the Photos tab
+      await page.waitForSelector('[aria-label="Photos"][id="photos"]', { timeout: 15000 });
+      console.log('Found Photos tab');
+      
+      await page.click('[aria-label="Photos"][id="photos"]');
+      console.log('Clicked Photos tab');
+    }
+
+    // Wait for the photos section to load
+    await page.waitForSelector('[data-hotel-feature-id]', { timeout: 15000 });
+    console.log('Photos section loaded');
+
+    // Extract hotel images
+    const hotelImages = await page.evaluate(() => {
+      const imageElements = document.querySelectorAll('img[alt^="Photo "]');
+      const images = Array.from(imageElements)
+        .map(img => {
+          const url = img.getAttribute('src') || '';
+          return {
+            url: url,
+            alt: img.getAttribute('alt') || '',
+            caption: img.closest('[data-hotel-feature-id]')?.textContent || ''
+          };
+        })
+        .slice(0, 10); // Take the first 10 images
+
+      console.log('Found images:', images);
+      return images;
+    });
+
+    // Wait a bit before closing to see the results
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    
+    await browser.close();
+    console.log('Browser closed');
+
+    if (!hotelImages || hotelImages.length === 0) {
+      console.log('No hotel images found');
+      return res.status(404).json({ 
+        error: 'Could not find hotel images',
+        message: 'No images were found for the specified hotel. Please try a different hotel name or location.'
+      });
+    }
+
+    // Validate image URLs
+    console.log('Validating image URLs...');
+    const validatedImages = await Promise.all(
+      hotelImages.map(async (image) => {
+        const isValid = await validateImageUrl(image.url);
+        return isValid ? image : null;
+      })
+    );
+
+    // Filter out invalid images
+    const validImages = validatedImages.filter(image => image !== null);
+
+    if (validImages.length === 0) {
+      console.log('No valid hotel images found after validation');
+      return res.status(404).json({ 
+        error: 'Could not find valid hotel images',
+        message: 'No valid images were found after validation. Please try a different hotel name or location.'
+      });
+    }
+
+    console.log('Returning validated hotel images:', validImages);
+    res.json({ hotelImages: validImages });
+  } catch (error) {
+    console.error('Error scraping hotel images:', error);
+    res.status(500).json({ 
+      error: 'Failed to scrape hotel images',
       message: error.message,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
