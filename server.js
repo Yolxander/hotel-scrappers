@@ -11,6 +11,11 @@ const port = process.env.PORT || 3002;
 app.use(express.json());
 app.use(cors());
 
+// Root route handler
+app.get('/', (req, res) => {
+  res.redirect('/api/hotel-info');
+});
+
 // Helper function to validate image URLs
 async function validateImageUrl(url) {
   try {
