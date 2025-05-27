@@ -302,7 +302,7 @@ app.post('/api/hotel-images', async (req, res) => {
     }
 
     // Wait for the photos section to load
-    await page.waitForSelector('[data-hotel-feature-id]', { timeout: 15000 });
+    await page.waitForSelector('img[alt^="Photo "]', { timeout: 15000 });
     console.log('Photos section loaded');
 
     // Extract hotel images
@@ -311,10 +311,14 @@ app.post('/api/hotel-images', async (req, res) => {
       const images = Array.from(imageElements)
         .map(img => {
           const url = img.getAttribute('src') || '';
+          // Try to get caption from various possible parent elements
+          const caption = img.closest('[data-hotel-feature-id]')?.textContent || 
+                         img.closest('div[class*="caption"]')?.textContent ||
+                         img.closest('div[class*="description"]')?.textContent || '';
           return {
             url: url,
             alt: img.getAttribute('alt') || '',
-            caption: img.closest('[data-hotel-feature-id]')?.textContent || ''
+            caption: caption.trim()
           };
         })
         .slice(0, 10); // Take the first 10 images

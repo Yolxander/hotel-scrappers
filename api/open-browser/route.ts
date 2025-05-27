@@ -7,7 +7,7 @@ export async function POST(request: Request) {
     console.log('Opening browser with parameters:', { destination, location, checkInDate, checkOutDate, roomType });
 
     const browser = await chromium.launch({
-      headless: false,
+      headless: true,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',

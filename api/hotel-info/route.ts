@@ -7,7 +7,7 @@ export async function POST(request: Request) {
     console.log('Scraping hotel info for:', destination);
 
     const browser = await puppeteer.launch({
-      headless: false, // Make browser visible
+      headless: true // Make browser visible
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1920,1080']
     });
 
