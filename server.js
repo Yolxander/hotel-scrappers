@@ -3,9 +3,17 @@ const puppeteer = require('puppeteer');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const { chromium } = require('playwright');
+const https = require('https');
+const fs = require('fs');
 
 const app = express();
 const port = process.env.PORT || 3002;
+
+// SSL certificate paths
+const sslOptions = {
+  key: fs.readFileSync('/etc/letsencrypt/live/199.19.72.124.nip.io/privkey.pem'),
+  cert: fs.readFileSync('/etc/letsencrypt/live/199.19.72.124.nip.io/fullchain.pem')
+};
 
 // Middleware
 app.use(express.json());
@@ -944,8 +952,8 @@ app.post('/api/hotel-suggestions', async (req, res) => {
 });
 
 // Start server with error handling
-const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`Server running at http://0.0.0.0:${port}`);
+const server = https.createServer(sslOptions, app).listen(port, '0.0.0.0', () => {
+  console.log(`HTTPS Server running at https://0.0.0.0:${port}`);
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`Port ${port} is already in use. Please try a different port by setting the PORT environment variable.`);
