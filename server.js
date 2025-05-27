@@ -21,7 +21,13 @@ const sslOptions = {
 // Middleware
 app.use(express.json());
 app.use(cors({
-  origin: ['https://hotels-omega-three.vercel.app', 'http://localhost:3001', 'https://localhost:3443'],
+  origin: [
+    'https://hotels-omega-three.vercel.app',
+    'http://localhost:3001',
+    'https://localhost:3443',
+    'https://199.19.72.124:3443',
+    'http://199.19.72.124:3002'
+  ],
   methods: ['GET', 'POST'],
   credentials: true
 }));
