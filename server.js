@@ -201,78 +201,45 @@ app.post('/api/hotel-images', async (req, res) => {
 
     console.log('Scraping hotel images for:', destination);
 
-    const browser = await puppeteer.launch({
+    const browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1920,1080']
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-site-isolation-trials',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu'
+      ]
     });
 
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1920, height: 1080 });
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      viewport: { width: 1920, height: 1080 },
+      deviceScaleFactor: 1,
+      isMobile: false,
+      hasTouch: false
+    });
+
+    await context.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1'
+    });
+
+    const page = await context.newPage();
     
     // Navigate to Google Travel search
     const searchUrl = `https://www.google.com/travel/search?q=${encodeURIComponent(destination)}`;
     console.log('Navigating to:', searchUrl);
-    await page.goto(searchUrl, { waitUntil: 'networkidle0' });
+    await page.goto(searchUrl, { waitUntil: 'networkidle' });
     console.log('Page loaded');
 
-    // First check if there's an entity link
-    const entityLinkExists = await page.evaluate(() => {
-      const entityLink = document.querySelector('a[data-href^="/entity/Ch"]');
-      console.log('Found entity link:', entityLink);
-      return !!entityLink;
-    });
-
-    console.log('Entity link exists:', entityLinkExists);
-
-    if (entityLinkExists) {
-      console.log('Attempting to click entity link...');
-      
-      // Wait for the element to be visible and clickable
-      await page.waitForSelector('a[data-href^="/entity/Ch"]', { 
-        visible: true,
-        timeout: 10000 
-      });
-      
-      // Try clicking with different methods
-      try {
-        // Method 1: Direct click
-        await page.click('a[data-href^="/entity/Ch"]');
-        console.log('Direct click successful');
-      } catch (error) {
-        console.log('Direct click failed, trying alternative method...');
-        try {
-          // Method 2: Click using evaluate
-          await page.evaluate(() => {
-            const link = document.querySelector('a[data-href^="/entity/Ch"]');
-            if (link) {
-              console.log('Found link in evaluate:', link);
-              link.click();
-            }
-          });
-          console.log('Evaluate click successful');
-        } catch (error) {
-          console.log('Evaluate click failed:', error);
-          // Method 3: Click using mouse events
-          const element = await page.$('a[data-href^="/entity/Ch"]');
-          if (element) {
-            await element.click({ delay: 100 });
-            console.log('Mouse event click successful');
-          }
-        }
-      }
-
-      console.log('Waiting for navigation after click...');
-      // Wait for the hotel page to load
-      await page.waitForNavigation({ 
-        waitUntil: 'networkidle0',
-        timeout: 15000 
-      }).catch(error => {
-        console.log('Navigation timeout, but continuing...', error);
-      });
-      console.log('Hotel page loaded');
-    }
-
-    // Then check if Photos tab is already visible
+    // First check if Photos tab is already visible
     const photosTabExists = await page.evaluate(() => {
       const photosTab = document.querySelector('[aria-label="Photos"][id="photos"]');
       return !!photosTab;
@@ -290,7 +257,7 @@ app.post('/api/hotel-images', async (req, res) => {
       console.log('Clicked hotel entity link');
 
       // Wait for the hotel page to load
-      await page.waitForNavigation({ waitUntil: 'networkidle0' });
+      await page.waitForLoadState('networkidle');
       console.log('Hotel page loaded');
 
       // Now wait for and click the Photos tab
@@ -302,25 +269,65 @@ app.post('/api/hotel-images', async (req, res) => {
     }
 
     // Wait for the photos section to load
-    await page.waitForSelector('img[alt^="Photo "]', { timeout: 15000 });
+    await page.waitForSelector('img[alt^="Photo "]', { timeout: 15000, state: 'attached' });
     console.log('Photos section loaded');
+
+    // Scroll through the page to trigger lazy loading
+    await page.evaluate(async () => {
+      await new Promise((resolve) => {
+        let totalHeight = 0;
+        const distance = 100;
+        const timer = setInterval(() => {
+          const scrollHeight = document.body.scrollHeight;
+          window.scrollBy(0, distance);
+          totalHeight += distance;
+
+          if (totalHeight >= scrollHeight) {
+            clearInterval(timer);
+            resolve(null);
+          }
+        }, 100);
+      });
+    });
+
+    // Wait a bit for images to load after scrolling
+    await page.waitForTimeout(2000);
 
     // Extract hotel images
     const hotelImages = await page.evaluate(() => {
       const imageElements = document.querySelectorAll('img[alt^="Photo "]');
       const images = Array.from(imageElements)
         .map(img => {
-          const url = img.getAttribute('src') || '';
+          // Get the highest quality image URL
+          const srcset = img.getAttribute('srcset');
+          let url = img.getAttribute('src') || '';
+          
+          if (srcset) {
+            // Parse srcset to get the highest quality image
+            const sources = srcset.split(',')
+              .map(src => {
+                const [url, size] = src.trim().split(' ');
+                return { url, size: parseInt(size) || 0 };
+              })
+              .sort((a, b) => b.size - a.size);
+            
+            if (sources.length > 0) {
+              url = sources[0].url;
+            }
+          }
+
           // Try to get caption from various possible parent elements
           const caption = img.closest('[data-hotel-feature-id]')?.textContent || 
                          img.closest('div[class*="caption"]')?.textContent ||
                          img.closest('div[class*="description"]')?.textContent || '';
+          
           return {
             url: url,
             alt: img.getAttribute('alt') || '',
             caption: caption.trim()
           };
         })
+        .filter(img => img.url && img.url.startsWith('http')) // Filter out invalid URLs
         .slice(0, 10); // Take the first 10 images
 
       console.log('Found images:', images);
