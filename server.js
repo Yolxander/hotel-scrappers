@@ -9,7 +9,11 @@ const port = process.env.PORT || 3002;
 
 // Middleware
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: ['https://hotels-omega-three.vercel.app', 'http://localhost:3001'],
+  methods: ['GET', 'POST'],
+  credentials: true
+}));
 
 // Root route handler
 app.get('/', (req, res) => {
