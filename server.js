@@ -3,14 +3,25 @@ const puppeteer = require('puppeteer');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const { chromium } = require('playwright');
+const https = require('https');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
-const port = process.env.PORT || 3002;
+const httpPort = process.env.HTTP_PORT || 3002;
+const httpsPort = process.env.HTTPS_PORT || 3443;
+
+// SSL certificate options
+const sslOptions = {
+  key: fs.readFileSync(path.join(__dirname, 'certificates', 'server.key')),
+  cert: fs.readFileSync(path.join(__dirname, 'certificates', 'server.cert'))
+};
 
 // Middleware
 app.use(express.json());
 app.use(cors({
-  origin: ['https://hotels-omega-three.vercel.app', 'http://localhost:3001'],
+  origin: ['https://hotels-omega-three.vercel.app', 'http://localhost:3001', 'https://localhost:3443'],
   methods: ['GET', 'POST'],
   credentials: true
 }));
@@ -943,15 +954,14 @@ app.post('/api/hotel-suggestions', async (req, res) => {
   }
 });
 
-// Start server with error handling
-const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`Server running at http://0.0.0.0:${port}`);
-}).on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`Port ${port} is already in use. Please try a different port by setting the PORT environment variable.`);
-    process.exit(1);
-  } else {
-    console.error('Error starting server:', err);
-    process.exit(1);
-  }
+// Create HTTP server
+const httpServer = http.createServer(app);
+httpServer.listen(httpPort, () => {
+  console.log(`HTTP Server running on port ${httpPort}`);
+});
+
+// Create HTTPS server
+const httpsServer = https.createServer(sslOptions, app);
+httpsServer.listen(httpsPort, () => {
+  console.log(`HTTPS Server running on port ${httpsPort}`);
 }); 
