@@ -7,6 +7,7 @@ const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const httpPort = process.env.HTTP_PORT || 3002;
@@ -17,6 +18,11 @@ const sslOptions = {
   key: fs.readFileSync(path.join(__dirname, 'certificates', 'server.key')),
   cert: fs.readFileSync(path.join(__dirname, 'certificates', 'server.cert'))
 };
+
+// Initialize Supabase client
+const supabaseUrl = 'https://wiuvtmcgpryiawssserj.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndpdXZ0bWNncHJ5aWF3c3NzZXJqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDcxNzUwNDgsImV4cCI6MjA2Mjc1MTA0OH0.KvEqvGTlcdT_BO7yTBljU86T4RgxCl9KCqaDr7QOwbI';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Middleware
 app.use(express.json());
@@ -956,6 +962,213 @@ app.post('/api/hotel-suggestions', async (req, res) => {
       error: 'Failed to scrape hotel deals',
       message: error.message,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// Popular cities list
+const POPULAR_CITIES = [
+  'New York',
+  'London',
+  'Paris',
+  'Tokyo',
+  'Rome',
+  'Barcelona',
+  'Amsterdam',
+  'Dubai',
+  'Singapore',
+  'Sydney'
+];
+
+// Function to calculate dates 7-14 days before check-in
+function calculateDates() {
+  const today = new Date();
+  const checkIn = new Date(today);
+  checkIn.setDate(today.getDate() + Math.floor(Math.random() * 7) + 7); // 7-14 days from now
+  
+  const checkOut = new Date(checkIn);
+  checkOut.setDate(checkIn.getDate() + 2); // 2 nights stay
+  
+  return {
+    checkIn: checkIn.toISOString().split('T')[0],
+    checkOut: checkOut.toISOString().split('T')[0]
+  };
+}
+
+// Function to save hotel deals to Supabase
+async function saveHotelDealsToSupabase(hotelDeals, destination, checkIn, checkOut, travelers) {
+  try {
+    // First, delete existing records for this destination
+    const { error: deleteError } = await supabase
+      .from('daily_hotel_deals')
+      .delete()
+      .eq('destination', destination);
+
+    if (deleteError) {
+      console.error('Error deleting existing records:', deleteError);
+      throw new Error(`Failed to delete existing records: ${deleteError.message}`);
+    }
+
+    console.log(`Deleted existing records for ${destination}`);
+
+    // Prepare the data for insertion
+    const dealsToInsert = hotelDeals.map(deal => ({
+      name: deal.name,
+      price: deal.price,
+      rating: deal.rating,
+      reviews: deal.reviews,
+      deal: deal.deal,
+      url: deal.url,
+      image: deal.image,
+      location: deal.location,
+      amenities: deal.amenities,
+      description: deal.description,
+      destination,
+      check_in_date: checkIn,
+      check_out_date: checkOut,
+      travelers,
+      created_at: new Date().toISOString()
+    }));
+
+    // Insert the new deals into Supabase
+    const { data, error } = await supabase
+      .from('daily_hotel_deals')
+      .insert(dealsToInsert);
+
+    if (error) {
+      console.error('Supabase error:', error);
+      throw new Error(`Failed to save hotel deals: ${error.message}`);
+    }
+
+    console.log('Successfully saved hotel deals:', data);
+    return data;
+  } catch (error) {
+    console.error('Error saving hotel deals:', error);
+    throw error;
+  }
+}
+
+// Function to scrape hotel deals for a city
+async function scrapeHotelDealsForCity(city) {
+  try {
+    const { checkIn, checkOut } = calculateDates();
+    const travelers = 2; // Default to 2 travelers
+
+    console.log(`Scraping hotel deals for ${city} from ${checkIn} to ${checkOut}`);
+
+    const response = await fetch('http://localhost:3002/api/hotel-suggestions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        destination: city,
+        checkIn,
+        checkOut,
+        travelers
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch hotel suggestions: ${response.statusText}`);
+    }
+
+    const { hotelSuggestions } = await response.json();
+    
+    if (!hotelSuggestions || hotelSuggestions.length === 0) {
+      console.log(`No hotel suggestions found for ${city}`);
+      return;
+    }
+
+    // Save the deals to Supabase
+    await saveHotelDealsToSupabase(hotelSuggestions, city, checkIn, checkOut, travelers);
+    
+    console.log(`Successfully scraped and saved ${hotelSuggestions.length} hotel deals for ${city}`);
+  } catch (error) {
+    console.error(`Error scraping hotel deals for ${city}:`, error);
+  }
+}
+
+// Function to get a random city from the list
+function getRandomCity() {
+  const randomIndex = Math.floor(Math.random() * POPULAR_CITIES.length);
+  return POPULAR_CITIES[randomIndex];
+}
+
+// Endpoint to trigger the automatic scraping for a random city
+app.post('/api/scrape-popular-cities', async (req, res) => {
+  try {
+    // Get a random city
+    const selectedCity = getRandomCity();
+    console.log(`Selected city for scraping: ${selectedCity}`);
+
+    // Start the scraping process for the selected city
+    scrapeHotelDealsForCity(selectedCity).catch(error => {
+      console.error('Error in background scraping:', error);
+    });
+
+    res.json({ 
+      message: 'Started scraping hotel deals',
+      selectedCity,
+      allCities: POPULAR_CITIES
+    });
+  } catch (error) {
+    console.error('Error starting scraping process:', error);
+    res.status(500).json({ 
+      error: 'Failed to start scraping process',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint to save hotel deals to Supabase
+app.post('/api/save-hotel-deals', async (req, res) => {
+  try {
+    const { hotelDeals, destination, checkIn, checkOut, travelers } = req.body;
+
+    if (!hotelDeals || !Array.isArray(hotelDeals)) {
+      return res.status(400).json({ error: 'Invalid hotel deals data' });
+    }
+
+    // Prepare the data for insertion
+    const dealsToInsert = hotelDeals.map(deal => ({
+      name: deal.name,
+      price: deal.price,
+      rating: deal.rating,
+      reviews: deal.reviews,
+      deal: deal.deal,
+      url: deal.url,
+      image: deal.image,
+      location: deal.location,
+      amenities: deal.amenities,
+      description: deal.description,
+      destination,
+      check_in_date: checkIn,
+      check_out_date: checkOut,
+      travelers,
+      created_at: new Date().toISOString()
+    }));
+
+    // Insert the deals into Supabase
+    const { data, error } = await supabase
+      .from('daily_hotel_deals')
+      .insert(dealsToInsert);
+
+    if (error) {
+      console.error('Supabase error:', error);
+      throw new Error(`Failed to save hotel deals: ${error.message}`);
+    }
+
+    res.json({ 
+      message: 'Successfully saved hotel deals',
+      count: dealsToInsert.length,
+      data 
+    });
+  } catch (error) {
+    console.error('Error saving hotel deals:', error);
+    res.status(500).json({ 
+      error: 'Failed to save hotel deals',
+      message: error.message 
     });
   }
 });
