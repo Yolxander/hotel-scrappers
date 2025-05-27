@@ -998,18 +998,18 @@ function calculateDates() {
 // Function to save hotel deals to Supabase
 async function saveHotelDealsToSupabase(hotelDeals, destination, checkIn, checkOut, travelers) {
   try {
-    // First, delete existing records for this destination
+    // First, delete ALL existing records from the database
     const { error: deleteError } = await supabase
       .from('daily_hotel_deals')
       .delete()
-      .eq('destination', destination);
+      .neq('id', 0); // This will delete all records
 
     if (deleteError) {
       console.error('Error deleting existing records:', deleteError);
       throw new Error(`Failed to delete existing records: ${deleteError.message}`);
     }
 
-    console.log(`Deleted existing records for ${destination}`);
+    console.log('Deleted all existing records from the database');
 
     // Prepare the data for insertion
     const dealsToInsert = hotelDeals.map(deal => ({
@@ -1056,25 +1056,128 @@ async function scrapeHotelDealsForCity(city) {
 
     console.log(`Scraping hotel deals for ${city} from ${checkIn} to ${checkOut}`);
 
-    const response = await fetch('http://localhost:3002/api/hotel-suggestions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        destination: city,
-        checkIn,
-        checkOut,
-        travelers
-      })
+    const browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--window-size=1920,1080',
+        '--hide-scrollbars',
+        '--disable-notifications',
+        '--disable-extensions',
+        '--force-color-profile=srgb',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-site-isolation-trials',
+        '--disable-blink-features=AutomationControlled',
+        '--incognito'
+      ]
     });
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch hotel suggestions: ${response.statusText}`);
+    const context = await browser.newContext({
+      viewport: { width: 1920, height: 1080 },
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      locale: 'en-US',
+      timezoneId: 'America/New_York',
+      geolocation: { longitude: -74.006, latitude: 40.7128 },
+      permissions: ['geolocation']
+    });
+
+    const page = await context.newPage();
+    
+    // Navigate to Google Travel search
+    const searchUrl = `https://www.google.com/travel/search?q=${encodeURIComponent(city)}`;
+    console.log('Navigating to:', searchUrl);
+    await page.goto(searchUrl, { waitUntil: 'networkidle' });
+    console.log('Page loaded');
+
+    // Wait for the hotel suggestions to load
+    console.log('Waiting for hotel suggestions to load...');
+    try {
+      await page.waitForSelector('div[class*="uaTTDe"]', { timeout: 30000 });
+      console.log('Hotel suggestions container found');
+    } catch (error) {
+      console.error('Hotel suggestions not found:', error);
+      await browser.close();
+      return;
     }
 
-    const { hotelSuggestions } = await response.json();
-    
+    // Extract hotel suggestions
+    console.log('Extracting hotel suggestions...');
+    const hotelSuggestions = await page.evaluate(() => {
+      const suggestions = [];
+      const hotelElements = document.querySelectorAll('div[class*="uaTTDe"]');
+      console.log(`Found ${hotelElements.length} hotel elements`);
+      
+      // Limit to 10 results
+      const limitedElements = Array.from(hotelElements).slice(0, 10);
+      
+      limitedElements.forEach((element, index) => {
+        // Extract hotel name
+        const nameElement = element.querySelector('h2.BgYkof');
+        const name = nameElement?.textContent || '';
+
+        // Extract price
+        const priceElement = element.querySelector('.W9vOvb.nDkDDb');
+        const price = priceElement?.textContent || '';
+
+        // Extract rating
+        const ratingElement = element.querySelector('.KFi5wf');
+        const rating = ratingElement?.textContent || '';
+
+        // Extract reviews
+        const reviewsElement = element.querySelector('.jdzyld');
+        const reviews = reviewsElement?.textContent?.replace(/[()]/g, '') || '';
+
+        // Extract deal
+        const dealElement = element.querySelector('.PymDFe.YAMDU');
+        const deal = dealElement?.textContent || '';
+
+        // Extract URL
+        const urlElement = element.querySelector('a.PVOOXe');
+        const url = urlElement?.getAttribute('href') || '';
+
+        // Extract image
+        const imgElement = element.querySelector('img.x7VXS');
+        const image = imgElement?.getAttribute('src') || '';
+
+        // Extract location
+        const locationElement = element.querySelector('.uTUoTb.pWBec');
+        const location = locationElement?.textContent || '';
+
+        // Extract amenities
+        const amenitiesElements = element.querySelectorAll('.LtjZ2d.sSHqwe.ogfYpf.QYEgn');
+        const amenities = Array.from(amenitiesElements).map(el => el.textContent || '');
+
+        // Extract description
+        const descriptionElement = element.querySelector('.lXJaOd');
+        const description = descriptionElement?.textContent || '';
+
+        const hotelData = {
+          name,
+          price,
+          rating,
+          reviews,
+          deal,
+          url,
+          image,
+          location,
+          amenities,
+          description
+        };
+        console.log(`Hotel ${index + 1}:`, hotelData);
+        suggestions.push(hotelData);
+      });
+
+      return suggestions;
+    });
+
+    await browser.close();
+    console.log('Browser closed');
+
     if (!hotelSuggestions || hotelSuggestions.length === 0) {
       console.log(`No hotel suggestions found for ${city}`);
       return;
