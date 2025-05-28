@@ -670,7 +670,7 @@ app.post('/api/hotel-prices', async (req, res) => {
 
         // Get the full URL
         const relativeUrl = room.getAttribute('href') || '';
-        const url = relativeUrl.startsWith('http') ? relativeUrl : `https://www.google.com/travel${relativeUrl}`;
+        const url = relativeUrl.startsWith('http') ? relativeUrl : `https://www.google.com/${relativeUrl}`;
 
         const roomData = {
           type,
@@ -1278,12 +1278,12 @@ app.post('/api/save-hotel-deals', async (req, res) => {
 
 // Create HTTP server
 const httpServer = http.createServer(app);
-httpServer.listen(httpPort, () => {
+httpServer.listen(httpPort, '0.0.0.0', () => {
   console.log(`HTTP Server running on port ${httpPort}`);
 });
 
 // Create HTTPS server
 const httpsServer = https.createServer(sslOptions, app);
-httpsServer.listen(httpsPort, () => {
+httpsServer.listen(httpsPort, '0.0.0.0', () => {
   console.log(`HTTPS Server running on port ${httpsPort}`);
 }); 
